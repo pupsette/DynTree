@@ -1,7 +1,4 @@
-﻿using System;
-using System.Collections;
-using System.Diagnostics;
-using System.Numerics;
+﻿using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -12,8 +9,6 @@ namespace DynTree
     [StructLayout(LayoutKind.Sequential, Pack = 1, Size = 9)]
     public readonly partial struct DynTree
     {
-        private delegate bool TryGetNextIdDelegate(ulong payload, uint currentPosition);
-
         private const int MAX_ARRAY_ITEM_COUNT = 1024;
         private const int MIN_WIDTH = 4096;
 
