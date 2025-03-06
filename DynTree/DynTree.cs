@@ -240,6 +240,15 @@ namespace DynTree
             throw new InvalidOperationException($"Unexpected tree type '{type}'.");
         }
 
+        public DynTree Remove(IAllocator allocator, uint id)
+        {
+            if (TryRemove(allocator, id, out DynTree result))
+                return result;
+            
+            Acquire();
+            return this;
+        }
+
         public bool TryRemove(IAllocator allocator, uint id, out DynTree result)
         {
             DynTreeType type = TreeType();
