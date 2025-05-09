@@ -215,7 +215,7 @@ namespace DynTree
 
             public void Release(IAllocator allocator)
             {
-                if (Interlocked.Decrement(ref data[0]) != 0)
+                if ((Interlocked.Decrement(ref data[0]) & REF_COUNT_MASK) != 0)
                     return;
 
                 for (int i = 0; i < CHILDREN; i++)

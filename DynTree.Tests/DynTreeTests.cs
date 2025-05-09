@@ -7,15 +7,27 @@ namespace DynTree.Tests
     {
         private StreamWriter log = new StreamWriter("log.txt");
 
-        private static readonly IAllocator allocator = new DefaultAllocator();
+        private static readonly TrackingAllocator allocator = new TrackingAllocator();
         private const int SEED = 8879123;
 
         [OneTimeTearDown]
-        public void TearDown()
+        public void OneTimeTearDown()
         {
             log.Dispose();
         }
 
+        [SetUp]
+        public void SetUp()
+        {
+            allocator.AllocatedChunks = 0;
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            Assert.That(allocator.AllocatedChunks, Is.EqualTo(0));
+        }
+        
         [TestCase(32, 32, SEED)]
         [TestCase(10, 2500, SEED)]
         public void Test_complete_ranges(int maxCount, int maxId, int? seed = null)
@@ -45,6 +57,7 @@ namespace DynTree.Tests
             }
 
             Assert.That(tree.GetCount(), Is.EqualTo(size));
+            tree.Release(allocator);
         }
 
         [TestCase(0)]
@@ -113,6 +126,8 @@ namespace DynTree.Tests
                 bool isPresent = items.Contains(i);
                 Assert.That(tree.Contains(i), Is.EqualTo(isPresent), $"Contains({i}) should be {isPresent}");
             }
+            
+            tree.Release(allocator);
         }
         
         [TestCase(3597, 6000, SEED)]
@@ -201,6 +216,8 @@ namespace DynTree.Tests
             }
             w.Stop();
             Console.WriteLine($"Check took {w.Elapsed.Milliseconds:0.0}ms.");
+            
+            tree.Release(allocator);
         }
 
         private static uint[] PickRandom(int count, int maxId, Random random)
