@@ -5,15 +5,12 @@ namespace DynTree.Tests
     [TestFixture]
     public class DynTreeTests
     {
-        private StreamWriter log = new StreamWriter("log.txt");
-
         private static readonly TrackingAllocator allocator = new TrackingAllocator();
         private const int SEED = 8879123;
 
         [OneTimeTearDown]
         public void OneTimeTearDown()
         {
-            log.Dispose();
         }
 
         [SetUp]
@@ -98,7 +95,6 @@ namespace DynTree.Tests
             {
                 uint id = (uint)random.NextInt64(maxId + 1);
                 bool isNew = items.Add(id);
-                log.WriteLine($"Count: {tree.GetCount()}, Adding {id}");
                 tree = tree.MakeImmutable();
                 bool wasPresent = tree.Contains(id);
                 if (isNew && wasPresent)
@@ -108,17 +104,11 @@ namespace DynTree.Tests
                     throw new Exception("Immutable!!!");
                 int consumption = tree.EstimateMemoryConsumption();
                 int percent = (consumption + 9) * 100 / ((int)tree.GetCount() * 4 + 9);
-                log.WriteLine($"Memory: {consumption} --> {percent}%");
                 tree.Release(allocator);
-                log.WriteLine("--------------------");
                 tree = newTree;
                 if (items.Count != tree.GetCount())
-                {
-                    log.WriteLine("Count mismatch.");
                     break;
-                }
             }
-            Console.WriteLine(tree);
             Console.WriteLine($"Size {size}: {tree.TreeType()}");
 
             for (uint i = 0; i < maxId; i++)
@@ -126,7 +116,11 @@ namespace DynTree.Tests
                 bool isPresent = items.Contains(i);
                 Assert.That(tree.Contains(i), Is.EqualTo(isPresent), $"Contains({i}) should be {isPresent}");
             }
-            
+
+            uint[] array = items.ToArray();
+            Array.Sort(array);
+            Assert.That(tree, Is.EqualTo(array));
+
             tree.Release(allocator);
         }
         
@@ -144,7 +138,6 @@ namespace DynTree.Tests
             {
                 uint id = (uint)random.NextInt64(maxId + 1);
                 bool isNew = items.Add(id);
-                log.WriteLine($"Count: {tree.GetCount()}, Adding {id}");
                 tree = tree.MakeImmutable();
                 bool wasPresent = tree.Contains(id);
                 if (isNew && wasPresent)
@@ -154,21 +147,19 @@ namespace DynTree.Tests
                     throw new Exception("Immutable!!!");
                 int consumption = tree.EstimateMemoryConsumption();
                 int percent = (consumption + 9) * 100 / ((int)tree.GetCount() * 4 + 9);
-                log.WriteLine($"Memory: {consumption} --> {percent}%");
                 tree.Release(allocator);
-                log.WriteLine("--------------------");
                 tree = newTree;
                 if (items.Count != tree.GetCount())
-                {
-                    log.WriteLine("Count mismatch.");
                     break;
-                }
             }
+
+            uint[] array = items.ToArray();
+            Array.Sort(array);
+            Assert.That(tree, Is.EqualTo(array));
 
             int removedCount = 0;
             foreach (uint id in items)
             {
-                Console.WriteLine($"Removing {id}");
                 tree = tree.MakeImmutable();
                 bool wasPresent = tree.Contains(id);
                 if (!wasPresent)
@@ -192,6 +183,8 @@ namespace DynTree.Tests
                 }
                 tree = newTree;
             }
+
+            Assert.That(tree.GetEnumerator().MoveNext(), Is.False);
 
             Console.WriteLine(tree);
         }

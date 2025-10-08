@@ -198,65 +198,23 @@ namespace DynTree
                 return new IdStreamReaderBitSet(Bits, LONGS_IN_BITSET);
             }
 
-            private class IdStreamReaderBitSet : IIdStreamReader
+            private struct IdStreamReaderBitSet : IIdStreamReader
             {
-                private readonly ulong* bitSetData;
-                private readonly int length;
-                private uint currentBit;
+                private BitSetEnumerator enumerator;
 
                 public IdStreamReaderBitSet(ulong* bitSetData, int length)
                 {
-                    this.bitSetData = bitSetData;
-                    this.length = length;
+                    enumerator = new BitSetEnumerator(bitSetData, length);
                 }
 
                 public int Read(Span<uint> target)
                 {
                     for (int i = 0; i < target.Length; i++)
                     {
-                        if (!TryGetNextBit(out target[i]))
+                        if (!enumerator.TryGetNextBit(out target[i]))
                             return i;
                     }
                     return target.Length;
-                }
-
-                private bool TryGetNextBit(out uint id)
-                {
-                    if (currentBit < 0)
-                    {
-                        id = default;
-                        return false;
-                    }
-
-                    uint i = currentBit >> 6;
-                    if (i >= LONGS_IN_BITSET)
-                    {
-                        id = default;
-                        return false;
-                    }
-                    int subIndex = (int)(currentBit & 0x3f); // index within the word
-                    ulong word = bitSetData[i] >> subIndex; // skip all the bits to the right of index
-
-                    if (word != 0)
-                    {
-                        id = (uint)((i << 6) + subIndex + BitOperations.TrailingZeroCount(word));
-                        currentBit = id + 1;
-                        return true;
-                    }
-
-                    while (++i < LONGS_IN_BITSET)
-                    {
-                        word = bitSetData[i];
-                        if (word != 0)
-                        {
-                            id = (uint)((i << 6) + BitOperations.TrailingZeroCount(word));
-                            currentBit = id + 1;
-                            return true;
-                        }
-                    }
-
-                    id = default;
-                    return false;
                 }
             }
         }

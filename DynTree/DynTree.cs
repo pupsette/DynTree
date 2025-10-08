@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -9,14 +10,25 @@ namespace DynTree
     [StructLayout(LayoutKind.Sequential, Pack = 1, Size = 9)]
     public readonly partial struct DynTree
     {
-        private const int MAX_ARRAY_ITEM_COUNT = 1024;
-        private const int MIN_WIDTH = 4096;
+        /// <summary>
+        /// Empty DynTree.
+        /// </summary>
+        public static readonly DynTree Empty = new DynTree();
 
+        /// <summary>
+        /// The type of the DynTree.
+        /// </summary>
         public readonly byte Type;
+
+        /// <summary>
+        /// The payload of the DynTree. Its contents depend on the <see cref="Type"/>.
+        /// </summary>
         public readonly ulong Payload;
 
-        public static readonly DynTree Empty = new DynTree();
+        private const byte IMMUTABLE_FLAG = 0x80;
+        private const int MAX_ARRAY_ITEM_COUNT = 1024;
         private const uint MAX_VALUE_INLINE3 = 0x1FFFFF;
+        private const int MIN_WIDTH = 4096;
 
         internal DynTree(DynTreeType type, ulong payload, bool isImmutable)
         {
@@ -36,17 +48,8 @@ namespace DynTree
             Payload = payload;
         }
 
-        private const byte IMMUTABLE_FLAG = 0x80;
-
-        public bool IsImmutable { get => (Type & IMMUTABLE_FLAG) != 0; }
-
         public bool IsEmpty { get => Type == (int)DynTreeType.Empty; }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public DynTreeType TreeType()
-        {
-            return (DynTreeType)(Type & 0x7F);
-        }
+        public bool IsImmutable { get => (Type & IMMUTABLE_FLAG) != 0; }
 
         public static DynTree Create(IAllocator allocator, uint[] ids)
         {
@@ -64,49 +67,6 @@ namespace DynTree
             return Create(allocator, ref buffer, 0, uint.MaxValue, 3);
         }
 
-        private static DynTree Create(IAllocator allocator, ReadOnlySpan<uint> ids, uint offset)
-        {
-            if (TryCreateLeaf(allocator, ids, offset, out DynTree result))
-                return result;
-
-            return Node.Create(allocator, ids, offset).ToDynTree();
-        }
-
-        private static bool TryCreateLeaf(IAllocator allocator, ReadOnlySpan<uint> ids, uint offset, out DynTree dynTree)
-        {
-            if (ids.Length == 0)
-            {
-                dynTree = Empty;
-                return true;
-            }
-
-#if DEBUG
-            if (ids[0] < offset)
-                throw new ArgumentOutOfRangeException(nameof(ids), "Smallest ID must not be smaller than the given offset.");
-            if (ids.Length > MIN_WIDTH)
-                throw new ArgumentOutOfRangeException(nameof(ids), $"A leaf node may not contain more than {MIN_WIDTH} entries.");
-#endif
-
-            DynTreeType type = ChooseType(ids.Length, ids[^1] - offset);
-            if (type == DynTreeType.Node)
-            {
-                dynTree = default;
-                return false;
-            }
-            dynTree = type switch
-            {
-                DynTreeType.Inline1 => Create(ids[0] - offset),
-                DynTreeType.Inline2 => Create(ids[0] - offset, ids[1] - offset),
-                DynTreeType.Inline3 => CreateInline3(ids[0] - offset, ids[1] - offset, ids[2] - offset),
-                DynTreeType.Inline4 => CreateInline4(ids[0] - offset, ids[1] - offset, ids[2] - offset, ids[3] - offset),
-                DynTreeType.BitSet => BitSet.Create(allocator, ids, offset).ToDynTree(),
-                DynTreeType.Array16 => Array16.Create(allocator, ids, offset).ToDynTree(),
-                DynTreeType.Array32 => Array32.Create(allocator, ids, offset).ToDynTree(),
-                _ => throw new InvalidOperationException()
-            };
-            return true;
-        }
-
         public static DynTree Create(uint id1)
         {
             return new DynTree(DynTreeType.Inline1, id1);
@@ -119,60 +79,156 @@ namespace DynTree
             return new DynTree(DynTreeType.Inline2, ((ulong)id1 << 32) | id2);
         }
 
-        private static DynTree CreateInline3(uint id1, uint id2, uint id3)
+        public unsafe void Acquire()
         {
-#if DEBUG
-            if (id1 >= id2)
-                throw new ArgumentOutOfRangeException();
-            if (id2 >= id3)
-                throw new ArgumentOutOfRangeException();
-            if (id3 >= 1 << 21)
-                throw new ArgumentOutOfRangeException();
-#endif
-            return new DynTree(DynTreeType.Inline3, ((ulong)id1 << 42) | ((ulong)id2 << 21) | id3);
+            switch (TreeType())
+            {
+                case DynTreeType.Array16:
+                case DynTreeType.Array32:
+                case DynTreeType.BitSet:
+                case DynTreeType.Node:
+                    Interlocked.Increment(ref *(uint*)Payload);
+                    break;
+            }
         }
-
-        private static DynTree CreateInline4(uint id1, uint id2, uint id3, uint id4)
-        {
-#if DEBUG
-            if (id1 >= id2)
-                throw new ArgumentOutOfRangeException();
-            if (id2 >= id3)
-                throw new ArgumentOutOfRangeException();
-            if (id3 >= id4)
-                throw new ArgumentOutOfRangeException();
-            if (id4 > ushort.MaxValue)
-                throw new ArgumentOutOfRangeException();
-#endif
-            Vector64<ushort> vector = Vector64.Create((ushort)id1, (ushort)id2, (ushort)id3, (ushort)id4);
-            return new DynTree(DynTreeType.Inline4, vector.AsUInt64().GetElement(0));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint Inline3Id0() => (uint)(Payload >> 42) & 0x1FFFFF;
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint Inline3Id1() => (uint)(Payload >> 21) & 0x1FFFFF;
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint Inline3Id2() => (uint)Payload & 0x1FFFFF;
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint Inline1Id0() => (uint)Payload;
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint Inline2Id0() => (uint)(Payload >> 32);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint Inline2Id1() => (uint)Payload;
 
         public DynTree Add(IAllocator allocator, uint id)
         {
             if (TryAdd(allocator, id, out DynTree result))
                 return result;
-            
+
             Acquire();
             return this;
+        }
+
+        public bool Contains(uint id)
+        {
+            DynTreeType type = TreeType();
+            return type switch
+            {
+                DynTreeType.Node => AsNode.Contains(id),
+                DynTreeType.Array16 => AsArray16.Contains(id),
+                DynTreeType.BitSet => AsBitSet.Contains(id),
+                DynTreeType.Array32 => AsArray32.Contains(id),
+                DynTreeType.Empty => false,
+                DynTreeType.Inline1 => Inline1Id0() == id,
+                DynTreeType.Inline2 => Inline2Id0() == id | Inline2Id1() == id,
+                DynTreeType.Inline3 => Inline3Id0() == id || Inline3Id1() == id || Inline3Id2() == id,
+                DynTreeType.Inline4 => id <= ushort.MaxValue && Vector64.EqualsAny(Vector64.Create((ushort)id), Vector64.Create(Payload).AsUInt16()),
+                _ => throw new InvalidOperationException()
+            };
+        }
+
+        public int EstimateMemoryConsumption()
+        {
+            const int heapObjectOverhead = 32;
+            return TreeType() switch
+            {
+                DynTreeType.Empty => 0,
+                DynTreeType.Inline1 => 0,
+                DynTreeType.Inline2 => 0,
+                DynTreeType.Inline3 => 0,
+                DynTreeType.Inline4 => 0,
+                DynTreeType.Array16 => heapObjectOverhead + (int)AsArray16.Count * sizeof(ushort) + 6,
+                DynTreeType.Array32 => heapObjectOverhead + (int)AsArray32.Count * sizeof(uint) + 8,
+                DynTreeType.BitSet => heapObjectOverhead + BitSet.SIZE,
+                DynTreeType.Node => EstimateNodeSize(AsNode),
+                _ => throw new InvalidOperationException()
+            };
+
+            static int EstimateNodeSize(Node node)
+            {
+                int total = heapObjectOverhead + Node.SIZE;
+                for (int i = 0; i < Node.CHILDREN; i++)
+                    total += node[i].EstimateMemoryConsumption();
+                return total;
+            }
+        }
+
+        public uint GetCount()
+        {
+            DynTreeType type = TreeType();
+            return type switch
+            {
+                DynTreeType.Array16 => AsArray16.Count,
+                DynTreeType.Array32 => AsArray32.Count,
+                DynTreeType.BitSet => AsBitSet.Count,
+                DynTreeType.Node => AsNode.TotalCount,
+                _ => (uint)type
+            };
+        }
+
+        public IIdStreamReader GetStreamReader()
+        {
+            return TreeType() switch
+            {
+                DynTreeType.Empty => IdStreamReaderInline.Empty,
+                DynTreeType.Inline1 => new IdStreamReaderInline(Inline1Id0()),
+                DynTreeType.Inline2 => new IdStreamReaderInline(Inline2Id0(), Inline2Id1()),
+                DynTreeType.Inline3 => new IdStreamReaderInline(Inline3Id0(), Inline3Id1(), Inline3Id2()),
+                DynTreeType.Inline4 => new IdStreamReaderInline(Vector64.Create(Payload).AsUInt16()),
+                DynTreeType.Array16 => AsArray16.GetStreamReader(),
+                DynTreeType.Array32 => AsArray32.GetStreamReader(),
+                DynTreeType.BitSet => AsBitSet.GetStreamReader(),
+                DynTreeType.Node => AsNode.GetStreamReader(),
+                _ => throw new InvalidOperationException()
+            };
+        }
+
+        public DynTree MakeImmutable()
+        {
+            if (IsImmutable)
+                return this;
+
+            if ((DynTreeType)Type == DynTreeType.Node)
+                AsNode.MakeImmutable();
+
+            return new DynTree((DynTreeType)Type, Payload, true);
+        }
+
+        public void Release(IAllocator allocator)
+        {
+            DynTreeType treeType = TreeType();
+            switch (treeType)
+            {
+                case DynTreeType.Array16:
+                    AsArray16.Release(allocator);
+                    break;
+
+                case DynTreeType.Array32:
+                    AsArray32.Release(allocator);
+                    break;
+
+                case DynTreeType.BitSet:
+                    AsBitSet.Release(allocator);
+                    break;
+
+                case DynTreeType.Node:
+                    AsNode.Release(allocator);
+                    break;
+            }
+        }
+
+        public DynTree Remove(IAllocator allocator, uint id)
+        {
+            if (TryRemove(allocator, id, out DynTree result))
+                return result;
+
+            Acquire();
+            return this;
+        }
+
+        public override string ToString()
+        {
+            var sb = new StringBuilder();
+            ToString(sb, 0);
+            return sb.ToString();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public DynTreeType TreeType()
+        {
+            return (DynTreeType)(Type & 0x7F);
         }
 
         public unsafe bool TryAdd(IAllocator allocator, uint id, out DynTree result)
@@ -233,15 +289,6 @@ namespace DynTree
             }
 
             throw new InvalidOperationException($"Unexpected tree type '{type}'.");
-        }
-
-        public DynTree Remove(IAllocator allocator, uint id)
-        {
-            if (TryRemove(allocator, id, out DynTree result))
-                return result;
-            
-            Acquire();
-            return this;
         }
 
         public bool TryRemove(IAllocator allocator, uint id, out DynTree result)
@@ -329,21 +376,14 @@ namespace DynTree
             throw new InvalidOperationException($"Unexpected tree type '{type}'.");
         }
 
-        private DynTree CreateParentAndAdd(IAllocator allocator, uint newId)
+        public void VisitIds(Func<uint, bool> visitor)
         {
-            Acquire();
-            Node node = Node.Create(allocator, newId);
-            node[0] = this;
-            node.TotalCount = GetCount() + 1;
+            VisitIds(new Visitor(visitor));
+        }
 
-            DynTree tree = node.ToDynTree();
-            DynTree newNode = tree.Add(allocator, newId);
-            tree.Release(allocator);
-
-            // this should not allocate anything, since the new node is mutable
-            if (newNode.Payload != tree.Payload)
-                throw new InvalidOperationException($"Node should be updated in-place when adding single ID {newId}.");
-            return tree;
+        public bool VisitIds(IIdsVisitorRaw visitor)
+        {
+            return VisitIds(0, visitor);
         }
 
         private static DynTreeType ChooseType(int count, uint maxId)
@@ -362,44 +402,12 @@ namespace DynTree
                 return DynTreeType.Node;
         }
 
-        private static void InsertIntoSpan<T>(Span<T> source, int index, Span<T> target, T newId)
+        private static DynTree Create(IAllocator allocator, ReadOnlySpan<uint> ids, uint offset)
         {
-            source.Slice(index).CopyTo(target.Slice(index + 1));
-            source.Slice(0, index).CopyTo(target);
-            target[index] = newId;
-        }
+            if (TryCreateLeaf(allocator, ids, offset, out DynTree result))
+                return result;
 
-        private bool TryAddToSpan(IAllocator allocator, Span<uint> span, uint newId, out DynTree result)
-        {
-            Span<uint> source = span[..^1];
-            int index = source.BinarySearch(newId);
-            if (index >= 0)
-            {
-                result = default;
-                return false;
-            }
-
-            InsertIntoSpan(source, ~index, span, newId);
-            result = Create(allocator, span, 0);
-            return true;
-        }
-
-        public bool Contains(uint id)
-        {
-            DynTreeType type = TreeType();
-            return type switch
-            {
-                DynTreeType.Node => AsNode.Contains(id),
-                DynTreeType.Array16 => AsArray16.Contains(id),
-                DynTreeType.BitSet => AsBitSet.Contains(id),
-                DynTreeType.Array32 => AsArray32.Contains(id),
-                DynTreeType.Empty => false,
-                DynTreeType.Inline1 => Inline1Id0() == id,
-                DynTreeType.Inline2 => Inline2Id0() == id | Inline2Id1() == id,
-                DynTreeType.Inline3 => Inline3Id0() == id || Inline3Id1() == id || Inline3Id2() == id,
-                DynTreeType.Inline4 => id <= ushort.MaxValue && Vector64.EqualsAny(Vector64.Create((ushort)id), Vector64.Create(Payload).AsUInt16()),
-                _ => throw new InvalidOperationException()
-            };
+            return Node.Create(allocator, ids, offset).ToDynTree();
         }
 
         private static unsafe DynTree Create(IAllocator allocator, ref IdBuffer buffer, uint inclusiveMin, uint inclusiveMax, int level)
@@ -445,61 +453,75 @@ namespace DynTree
             return node.ToDynTree();
         }
 
-        public void Release(IAllocator allocator)
+        private static DynTree CreateInline3(uint id1, uint id2, uint id3)
         {
-            DynTreeType treeType = TreeType();
-            switch (treeType)
-            {
-                case DynTreeType.Array16:
-                    AsArray16.Release(allocator);
-                    break;
-                case DynTreeType.Array32:
-                    AsArray32.Release(allocator);
-                    break;
-                case DynTreeType.BitSet:
-                    AsBitSet.Release(allocator);
-                    break;
-                case DynTreeType.Node:
-                    AsNode.Release(allocator);
-                    break;
-            }
+#if DEBUG
+            if (id1 >= id2)
+                throw new ArgumentOutOfRangeException();
+            if (id2 >= id3)
+                throw new ArgumentOutOfRangeException();
+            if (id3 >= 1 << 21)
+                throw new ArgumentOutOfRangeException();
+#endif
+            return new DynTree(DynTreeType.Inline3, ((ulong)id1 << 42) | ((ulong)id2 << 21) | id3);
         }
 
-        public unsafe void Acquire()
+        private static DynTree CreateInline4(uint id1, uint id2, uint id3, uint id4)
         {
-            switch (TreeType())
-            {
-                case DynTreeType.Array16:
-                case DynTreeType.Array32:
-                case DynTreeType.BitSet:
-                case DynTreeType.Node:
-                    Interlocked.Increment(ref *(uint*)Payload);
-                    break;
-            }
+#if DEBUG
+            if (id1 >= id2)
+                throw new ArgumentOutOfRangeException();
+            if (id2 >= id3)
+                throw new ArgumentOutOfRangeException();
+            if (id3 >= id4)
+                throw new ArgumentOutOfRangeException();
+            if (id4 > ushort.MaxValue)
+                throw new ArgumentOutOfRangeException();
+#endif
+            Vector64<ushort> vector = Vector64.Create((ushort)id1, (ushort)id2, (ushort)id3, (ushort)id4);
+            return new DynTree(DynTreeType.Inline4, vector.AsUInt64().GetElement(0));
         }
 
-        public uint GetCount()
+        private static void InsertIntoSpan<T>(Span<T> source, int index, Span<T> target, T newId)
         {
-            DynTreeType type = TreeType();
-            return type switch
+            source.Slice(index).CopyTo(target.Slice(index + 1));
+            source.Slice(0, index).CopyTo(target);
+            target[index] = newId;
+        }
+
+        private static bool TryCreateLeaf(IAllocator allocator, ReadOnlySpan<uint> ids, uint offset, out DynTree dynTree)
+        {
+            if (ids.Length == 0)
             {
-                DynTreeType.Array16 => AsArray16.Count,
-                DynTreeType.Array32 => AsArray32.Count,
-                DynTreeType.BitSet => AsBitSet.Count,
-                DynTreeType.Node => AsNode.TotalCount,
-                _ => (uint)type
+                dynTree = Empty;
+                return true;
+            }
+
+#if DEBUG
+            if (ids[0] < offset)
+                throw new ArgumentOutOfRangeException(nameof(ids), "Smallest ID must not be smaller than the given offset.");
+            if (ids.Length > MIN_WIDTH)
+                throw new ArgumentOutOfRangeException(nameof(ids), $"A leaf node may not contain more than {MIN_WIDTH} entries.");
+#endif
+
+            DynTreeType type = ChooseType(ids.Length, ids[^1] - offset);
+            if (type == DynTreeType.Node)
+            {
+                dynTree = default;
+                return false;
+            }
+            dynTree = type switch
+            {
+                DynTreeType.Inline1 => Create(ids[0] - offset),
+                DynTreeType.Inline2 => Create(ids[0] - offset, ids[1] - offset),
+                DynTreeType.Inline3 => CreateInline3(ids[0] - offset, ids[1] - offset, ids[2] - offset),
+                DynTreeType.Inline4 => CreateInline4(ids[0] - offset, ids[1] - offset, ids[2] - offset, ids[3] - offset),
+                DynTreeType.BitSet => BitSet.Create(allocator, ids, offset).ToDynTree(),
+                DynTreeType.Array16 => Array16.Create(allocator, ids, offset).ToDynTree(),
+                DynTreeType.Array32 => Array32.Create(allocator, ids, offset).ToDynTree(),
+                _ => throw new InvalidOperationException()
             };
-        }
-
-        public DynTree MakeImmutable()
-        {
-            if (IsImmutable)
-                return this;
-
-            if ((DynTreeType)Type == DynTreeType.Node)
-                AsNode.MakeImmutable();
-
-            return new DynTree((DynTreeType)Type, Payload, true);
+            return true;
         }
 
         [Conditional("DEBUG")]
@@ -509,55 +531,40 @@ namespace DynTree
                 throw new InvalidOperationException($"Tree type was expected to be {type}.");
         }
 
-        public int EstimateMemoryConsumption()
+        private DynTree CreateParentAndAdd(IAllocator allocator, uint newId)
         {
-            const int heapObjectOverhead = 32;
-            return TreeType() switch
-            {
-                DynTreeType.Empty => 0,
-                DynTreeType.Inline1 => 0,
-                DynTreeType.Inline2 => 0,
-                DynTreeType.Inline3 => 0,
-                DynTreeType.Inline4 => 0,
-                DynTreeType.Array16 => heapObjectOverhead + (int)AsArray16.Count * sizeof(ushort) + 6,
-                DynTreeType.Array32 => heapObjectOverhead + (int)AsArray32.Count * sizeof(uint) + 8,
-                DynTreeType.BitSet => heapObjectOverhead + BitSet.SIZE,
-                DynTreeType.Node => EstimateNodeSize(AsNode),
-                _ => throw new InvalidOperationException()
-            };
+            Acquire();
+            Node node = Node.Create(allocator, newId);
+            node[0] = this;
+            node.TotalCount = GetCount() + 1;
 
-            static int EstimateNodeSize(Node node)
-            {
-                int total = heapObjectOverhead + Node.SIZE;
-                for (int i = 0; i < Node.CHILDREN; i++)
-                    total += node[i].EstimateMemoryConsumption();
-                return total;
-            }
+            DynTree tree = node.ToDynTree();
+            DynTree newNode = tree.Add(allocator, newId);
+            tree.Release(allocator);
+
+            // this should not allocate anything, since the new node is mutable
+            if (newNode.Payload != tree.Payload)
+                throw new InvalidOperationException($"Node should be updated in-place when adding single ID {newId}.");
+            return tree;
         }
 
-        public IIdStreamReader GetStreamReader()
-        {
-            return TreeType() switch
-            {
-                DynTreeType.Empty => IdStreamReaderInline.Empty,
-                DynTreeType.Inline1 => new IdStreamReaderInline(Inline1Id0()),
-                DynTreeType.Inline2 => new IdStreamReaderInline(Inline2Id0(), Inline2Id1()),
-                DynTreeType.Inline3 => new IdStreamReaderInline(Inline3Id0(),Inline3Id1(),Inline3Id2()),
-                DynTreeType.Inline4 => new IdStreamReaderInline(Vector64.Create(Payload).AsUInt16()),
-                DynTreeType.Array16 => AsArray16.GetStreamReader(),
-                DynTreeType.Array32 => AsArray32.GetStreamReader(),
-                DynTreeType.BitSet => AsBitSet.GetStreamReader(),
-                DynTreeType.Node => AsNode.GetStreamReader(),
-                _ => throw new InvalidOperationException()
-            };
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint Inline1Id0() => (uint)Payload;
 
-        public override string ToString()
-        {
-            var sb = new StringBuilder();
-            ToString(sb, 0);
-            return sb.ToString();
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint Inline2Id0() => (uint)(Payload >> 32);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint Inline2Id1() => (uint)Payload;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint Inline3Id0() => (uint)(Payload >> 42) & 0x1FFFFF;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint Inline3Id1() => (uint)(Payload >> 21) & 0x1FFFFF;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint Inline3Id2() => (uint)Payload & 0x1FFFFF;
 
         private void ToString(StringBuilder sb, int indent)
         {
@@ -614,6 +621,109 @@ namespace DynTree
                         break;
                     }
                 default: throw new InvalidOperationException();
+            }
+        }
+
+        private bool TryAddToSpan(IAllocator allocator, Span<uint> span, uint newId, out DynTree result)
+        {
+            Span<uint> source = span[..^1];
+            int index = source.BinarySearch(newId);
+            if (index >= 0)
+            {
+                result = default;
+                return false;
+            }
+
+            InsertIntoSpan(source, ~index, span, newId);
+            result = Create(allocator, span, 0);
+            return true;
+        }
+
+        private bool VisitIds(uint offset, IIdsVisitorRaw visitor)
+        {
+            DynTreeType type = TreeType();
+
+            if (type == DynTreeType.Node)
+            {
+                for (uint i = 0; i < Node.CHILDREN; i++)
+                    if (!AsNode[(int)i].VisitIds(offset + i * AsNode.Width, visitor))
+                        return false;
+                return true;
+            }
+            else if (type == DynTreeType.Array16)
+                return visitor.VisitArray(offset, AsArray16.ItemsAsSpan);
+            else if (type == DynTreeType.BitSet)
+                return visitor.VisitBits(offset, AsBitSet.BitsAsSpan);
+            else if (type == DynTreeType.Array32)
+                return visitor.VisitArray(offset, AsArray32.ItemsAsSpan);
+            else if (type == DynTreeType.Empty)
+                return true;
+            else if (type == DynTreeType.Inline1)
+            {
+                Span<uint> tmp = [Inline1Id0()];
+                return visitor.VisitArray(offset, tmp);
+            }
+            else if (type == DynTreeType.Inline2)
+            {
+                Span<uint> tmp = [Inline2Id0(), Inline2Id1()];
+                return visitor.VisitArray(offset, tmp);
+            }
+            else if (type == DynTreeType.Inline3)
+            {
+                Span<uint> tmp = [Inline3Id0(), Inline3Id1(), Inline3Id2()];
+                return visitor.VisitArray(offset, tmp);
+            }
+            else if (type == DynTreeType.Inline4)
+            {
+                var v = Vector64.Create(Payload).AsUInt16();
+                Span<uint> tmp = [v[0], v[1], v[2], v[3]];
+                return visitor.VisitArray(offset, tmp);
+            }
+            else
+                throw new InvalidOperationException($"Unexpected tree type '{type}'.");
+        }
+
+        private struct Visitor : IIdsVisitorRaw
+        {
+            private readonly Func<uint, bool> visitor;
+
+            public Visitor(Func<uint, bool> visitor)
+            {
+                this.visitor = visitor;
+            }
+
+            public bool VisitArray(uint offset, ReadOnlySpan<uint> ids)
+            {
+                foreach (uint id in ids)
+                    if (!visitor(offset + id))
+                        return false;
+                return true;
+            }
+
+            public bool VisitArray(uint offset, ReadOnlySpan<ushort> ids)
+            {
+                foreach (uint id in ids)
+                    if (!visitor(offset + id))
+                        return false;
+                return true;
+            }
+
+            public bool VisitArray(uint offset, ReadOnlySpan<byte> ids)
+            {
+                foreach (uint id in ids)
+                    if (!visitor(offset + id))
+                        return false;
+                return true;
+            }
+
+            public bool VisitBits(uint offset, ReadOnlySpan<ulong> bits)
+            {
+                for (int i = 0; i < bits.Length; i++)
+                {
+                    if (!BitSetEnumerator.VisitSetBitIndices(bits[i], offset + ((uint)i << 6), visitor))
+                        return false;
+                }
+                return true;
             }
         }
     }
