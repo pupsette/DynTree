@@ -66,7 +66,7 @@ internal class IdStreamReaderInline : IIdStreamReader
         fixed (uint* ptr = ids.Items)
         {
             Span<uint> source = new(ptr, count);
-            int toCopy = Math.Min(source.Length, count);
+            int toCopy = Math.Min(target.Length, count);
             source[..toCopy].CopyTo(target);
 
             if (toCopy < count)

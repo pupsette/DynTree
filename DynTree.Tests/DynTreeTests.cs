@@ -82,6 +82,27 @@ namespace DynTree.Tests
         }
 
         [Test]
+        public void IdStreamReaderInline_supports_partial_reads()
+        {
+            // Inline2 holds 2 IDs. Reading with a 1-slot buffer must work incrementally.
+            // Bug: Math.Min(source.Length, count) always equals count, ignoring target.Length,
+            // so CopyTo throws ArgumentException when target is smaller than count.
+            DynTree tree = DynTree.Create(10u, 20u);
+            Assert.That(tree.TreeType(), Is.EqualTo(DynTreeType.Inline2), "Precondition");
+
+            IIdStreamReader reader = tree.GetStreamReader();
+            Span<uint> buf = stackalloc uint[1];
+
+            Assert.That(reader.Read(buf), Is.EqualTo(1));
+            Assert.That(buf[0], Is.EqualTo(10u));
+
+            Assert.That(reader.Read(buf), Is.EqualTo(1));
+            Assert.That(buf[0], Is.EqualTo(20u));
+
+            Assert.That(reader.Read(buf), Is.EqualTo(0), "Reader should be exhausted");
+        }
+
+        [Test]
         public void Add_to_Array16_with_id_above_ushort_max_upgrades_to_Array32()
         {
             // Array16 requires 5+ items all <= 65535
