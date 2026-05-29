@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using System.Numerics;
 
 namespace DynTree
 {
@@ -107,6 +106,24 @@ namespace DynTree
                     result = default;
                     return false;
                 }
+
+                if (bitSet.Count - 1 < 256)
+                {
+                    // Count drops below the BitSet threshold — downgrade to a smaller type.
+                    // Since a BitSet only holds IDs in [0, 4095], ChooseType will always
+                    // pick Array16 (or a smaller inline type) without needing to know maxId.
+                    Array16 array = Array16.Create(allocator, (int)bitSet.Count - 1);
+                    int index = 0;
+                    foreach (uint originalId in original)
+                    {
+                        if (originalId != id)
+                            array.Items[index++] = (ushort)originalId;
+                    }
+
+                    result = array.ToDynTree();
+                    return true;
+                }
+
                 if (original.IsImmutable)
                 {
                     BitSet newBitSet = Create(allocator, bitSet);

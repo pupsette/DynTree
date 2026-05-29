@@ -100,6 +100,68 @@ namespace DynTree.Tests
             newTree.Release(allocator);
         }
 
+        [Test]
+        public void Array16_upgrades_to_BitSet_when_count_reaches_256()
+        {
+            // 255 items in [0..254]: count=255 < 256, maxId=254 < 4096 → Array16
+            uint[] initialIds = Enumerable.Range(0, 255).Select(i => (uint)i).ToArray();
+            DynTree tree = DynTree.Create(allocator, initialIds);
+            Assert.That(tree.TreeType(), Is.EqualTo(DynTreeType.Array16), "Precondition: 255 items must be Array16");
+
+            // Adding item 255: count=256, maxId=255 < 4096 → BitSet
+            DynTree newTree = tree.Add(allocator, 255u);
+            tree.Release(allocator);
+
+            Assert.That(newTree.TreeType(), Is.EqualTo(DynTreeType.BitSet));
+            Assert.That(newTree.GetCount(), Is.EqualTo(256u));
+            Assert.That(newTree.Contains(255u), Is.True);
+
+            newTree.Release(allocator);
+        }
+
+        [Test]
+        public void BitSet_downgrades_to_Array16_when_count_drops_below_256()
+        {
+            // 256 items in [0..255]: count=256, maxId=255 < 4096 → BitSet
+            uint[] initialIds = Enumerable.Range(0, 256).Select(i => (uint)i).ToArray();
+            DynTree tree = DynTree.Create(allocator, initialIds);
+            Assert.That(tree.TreeType(), Is.EqualTo(DynTreeType.BitSet), "Precondition: 256 items must be BitSet");
+
+            // Removing one item: count drops to 255 < 256 → should become Array16
+            DynTree newTree = tree.Remove(allocator, 0u);
+            tree.Release(allocator);
+
+            Assert.That(newTree.TreeType(), Is.EqualTo(DynTreeType.Array16));
+            Assert.That(newTree.GetCount(), Is.EqualTo(255u));
+            Assert.That(newTree.Contains(0u), Is.False);
+            Assert.That(newTree.Contains(1u), Is.True);
+
+            newTree.Release(allocator);
+        }
+
+        [Test]
+        public void Add_to_Node_outside_current_range_does_not_double_count()
+        {
+            // Build a level-0 Node (Width=4096):
+            //   needs count > 1024 (else Array) AND maxId >= 4096 (else BitSet)
+            //   1024 items [0..1023] + one item at 4096 = 1025 items, maxId=4096
+            uint[] initialIds = Enumerable.Range(0, 1024).Select(i => (uint)i).Append(4096u).ToArray();
+            DynTree tree = DynTree.Create(allocator, initialIds);
+            Assert.That(tree.TreeType(), Is.EqualTo(DynTreeType.Node), "Precondition: tree must be a Node");
+            Assert.That(tree.GetCount(), Is.EqualTo(1025u));
+
+            // id=65536 gives childIndex = 65536/4096 = 16 >= CHILDREN(16),
+            // which triggers CreateParentAndAdd. this should produce count 1026
+            uint newId = 65536u;
+            DynTree newTree = tree.Add(allocator, newId);
+            tree.Release(allocator);
+
+            Assert.That(newTree.Contains(newId), Is.True);
+            Assert.That(newTree.GetCount(), Is.EqualTo(1026u));
+
+            newTree.Release(allocator);
+        }
+
         [TestCase(3597, 6000, SEED)]
         [TestCase(4097, 500000, SEED)]
         [TestCase(16000, 160000, SEED)]

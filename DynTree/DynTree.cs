@@ -536,7 +536,7 @@ namespace DynTree
             Acquire();
             Node node = Node.Create(allocator, newId);
             node[0] = this;
-            node.TotalCount = GetCount() + 1;
+            node.TotalCount = GetCount();
 
             DynTree tree = node.ToDynTree();
             DynTree newNode = tree.Add(allocator, newId);

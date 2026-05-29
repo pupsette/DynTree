@@ -308,7 +308,7 @@ namespace DynTree
                         Span<uint> remainingTarget = target.Slice(read);
                         int childRead = currentChild.Read(remainingTarget);
                         if (currentChildIndex > 0)
-                            remainingTarget.AddScalar((uint)currentChildIndex * width);
+                            remainingTarget.Slice(0, childRead).AddScalar((uint)currentChildIndex * width);
                         read += childRead;
                         if (childRead < remainingTarget.Length)
                             currentChild = null;
