@@ -81,6 +81,25 @@ namespace DynTree.Tests
                 Assert.That(subtracted[i], Is.EqualTo(array[i] - offset));
         }
 
+        [Test]
+        public void Add_to_Array16_with_id_above_ushort_max_upgrades_to_Array32()
+        {
+            // Array16 requires 5+ items all <= 65535
+            uint[] initialIds = [0u, 1u, 2u, 3u, 4u];
+            DynTree tree = DynTree.Create(allocator, initialIds);
+            Assert.That(tree.TreeType(), Is.EqualTo(DynTreeType.Array16), "Precondition: tree must be Array16");
+
+            uint newId = 65536u; // first value that exceeds ushort.MaxValue
+            DynTree newTree = tree.Add(allocator, newId);
+            tree.Release(allocator);
+
+            Assert.That(newTree.TreeType(), Is.EqualTo(DynTreeType.Array32));
+            Assert.That(newTree.Contains(newId), Is.True, $"Tree should contain {newId} after upgrade to Array32");
+            Assert.That(newTree.GetCount(), Is.EqualTo((uint)initialIds.Length + 1));
+
+            newTree.Release(allocator);
+        }
+
         [TestCase(3597, 6000, SEED)]
         [TestCase(4097, 500000, SEED)]
         [TestCase(16000, 160000, SEED)]

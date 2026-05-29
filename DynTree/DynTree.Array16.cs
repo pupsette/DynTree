@@ -113,7 +113,7 @@ namespace DynTree
                     Span<uint> target = newArray.ItemsAsSpan;
                     for (int i = index; i < existing.Length; i++)
                         target[i + 1] = existing[i];
-                    target[index] = (ushort)id;
+                    target[index] = id;
                     for (int i = 0; i < index; i++)
                         target[i] = existing[i];
                     result = newArray.ToDynTree();
